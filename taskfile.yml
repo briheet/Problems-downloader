@@ -1,0 +1,15 @@
+version: '3'
+
+tasks:
+
+  build:
+    desc: Build the project.
+    cmds:
+      - go build -ldflags "-s -w" -o ac main.go
+
+  dw:
+    desc: Downloads the contest.
+    deps: [build]
+    silent: true
+    cmds:
+      - ./ac dw -c {{.CLI_ARGS}}

@@ -13,3 +13,10 @@ tasks:
     silent: true
     cmds:
       - ./ac dw -c {{.CLI_ARGS}}
+
+      
+  lint:
+    desc: "Lint golang code"
+    cmds:
+      - echo "Running golangci-lint..."
+      - golangci-lint run --timeout=5m

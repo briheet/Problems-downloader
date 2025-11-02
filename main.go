@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -23,9 +25,11 @@ type Cookie struct {
 	RevelFlash   string `json:"REVEL_FLASH"`
 }
 
+type cookieContextKey struct{}
+
 var (
-	getProblemsPageURL = "https://atcoder.jp/contests/abc"
-	CookieKey          = "cookie"
+	getProblemsPageURL string = "https://atcoder.jp/contests/abc"
+	cookieKey                 = cookieContextKey{}
 )
 
 func main() {
@@ -51,6 +55,7 @@ func main() {
 func downloadCmd(ctx context.Context) *cobra.Command {
 
 	var contestNumber int
+	var directoryPath string
 
 	downloadCmd := &cobra.Command{
 		Use:   "dw",
@@ -73,7 +78,11 @@ func downloadCmd(ctx context.Context) *cobra.Command {
 				return err
 			}
 
-			defer file.Close()
+			defer func() {
+				if err := file.Close(); err != nil {
+					log.Fatal(err)
+				}
+			}()
 
 			// Read that shit in a buffer
 			body, err := io.ReadAll(file)
@@ -89,7 +98,31 @@ func downloadCmd(ctx context.Context) *cobra.Command {
 			}
 
 			// If successful, store it in context as a value and get the value from context when required
-			ctx = context.WithValue(ctx, CookieKey, cookie)
+			ctx = context.WithValue(ctx, cookieKey, cookie)
+
+			// Get current working directory
+			currDir, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+
+			// Default directory path to current dir when flag not provided
+			if directoryPath == "" {
+				directoryPath = currDir
+			} else if !filepath.IsAbs(directoryPath) {
+
+				// Check if the directory actually exists, or else default to curr directory
+				_, err := os.Stat(directoryPath)
+				if err != nil {
+
+					if errors.Is(err, os.ErrNotExist) {
+						return fmt.Errorf("directory '%s' does not exists: %v", directoryPath, err)
+					} else {
+						return fmt.Errorf("error checking directory '%s': %v", directoryPath, err)
+					}
+				}
+
+			}
 
 			return nil
 		},
@@ -98,13 +131,14 @@ func downloadCmd(ctx context.Context) *cobra.Command {
 			// Download the html files, look for testcases, create new directories, set them up
 			// We have the contest number with us, send it now in functions that will take care of it
 
-			err := DownloadAndLoadProblems(ctx, contestNumber)
+			err := DownloadAndLoadProblems(ctx, contestNumber, directoryPath)
 
 			return err
 		},
 	}
 
 	downloadCmd.Flags().IntVarP(&contestNumber, "contest", "c", 1, "used to give contest number")
+	downloadCmd.Flags().StringVarP(&directoryPath, "path", "p", "", "used to express directory path (defaults to current directory)")
 
 	return downloadCmd
 }
@@ -123,15 +157,34 @@ func runTestsCmd(ctx context.Context) *cobra.Command {
 	return runTestsCmd
 }
 
-func DownloadAndLoadProblems(ctx context.Context, contestNumber int) error {
+func DownloadAndLoadProblems(ctx context.Context, contestNumber int, directoryPath string) error {
 
 	// First check how many problems are there, then proceed to download their data(html), parse it, and create a A.cpp file and multiple testcases file in their respective directories
-	problemNumber, err := GetNumberOfProblems(ctx, contestNumber)
+	problemsNumber, err := GetNumberOfProblems(ctx, contestNumber)
 	if err != nil {
 		return err
 	}
 
-	log.Printf("Problem number: %v", problemNumber)
+	// Now we will have to make that many directories, starting from A and so on. Lets take this directory as a flag
+	// Loop over the problems and create directoriess.
+	// First build the main directory i.e. the contest number
+
+	directoryPath = filepath.Join(directoryPath, fmt.Sprintf("ABC%d", contestNumber))
+	err = os.MkdirAll(directoryPath, 0755)
+	if err != nil {
+		return err
+	}
+
+	for i := 0; i < problemsNumber; i++ {
+		alpha := string('A' + rune(i))
+
+		newProblemDirectory := filepath.Join(directoryPath, alpha)
+		err := os.MkdirAll(newProblemDirectory, 0755)
+		if err != nil {
+			return err
+		}
+
+	}
 
 	return nil
 }
@@ -147,7 +200,7 @@ func GetNumberOfProblems(ctx context.Context, contestNumber int) (int, error) {
 	}
 
 	// Get cookie value from context
-	cookieVals, ok := ctx.Value(CookieKey).(Cookie)
+	cookieVals, ok := ctx.Value(cookieKey).(Cookie)
 	if !ok {
 		return 0, fmt.Errorf("cookie values not found in context")
 	}
@@ -162,7 +215,11 @@ func GetNumberOfProblems(ctx context.Context, contestNumber int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Fatal(err)
+		}
+	}()
 
 	if resp.StatusCode != 200 {
 		return 0, fmt.Errorf("unexpected status code %d while fetching contest page %q", resp.StatusCode, currentContestPageURL)
@@ -173,7 +230,7 @@ func GetNumberOfProblems(ctx context.Context, contestNumber int) (int, error) {
 		return 0, err
 	}
 
-	taskScoreRegex := regexp.MustCompile(`<td style="text-align:center">([A-Z])</td>\s*<td style="text-align:center">(\d+)</td>`)
+	taskScoreRegex := regexp.MustCompile(`<td[^>]*>\s*([A-Z])\s*</td>\s*<td[^>]*>\s*(\d+)\s*</td>`)
 	matches := taskScoreRegex.FindAllStringSubmatch(string(html), -1)
 
 	if len(matches) == 0 {

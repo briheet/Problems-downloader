@@ -30,13 +30,11 @@ type Cookie struct {
 }
 
 type cookieContextKey struct{}
-type directoryContextKey struct{}
 
 var (
 	getProblemsPageURL = "https://atcoder.jp/contests/abc"
 	testcasesRegex     = `(?s)<h3>Sample Input\s*\d+</h3>\s*<pre>(.*?)</pre>.*?<h3>Sample Output\s*\d+</h3>\s*<pre>(.*?)</pre>`
 	cookieKey          = cookieContextKey{}
-	directoryKey       = directoryContextKey{}
 )
 
 func main() {

@@ -34,7 +34,7 @@ type directoryContextKey struct{}
 
 var (
 	getProblemsPageURL = "https://atcoder.jp/contests/abc"
-	testcasesRegex     = `(?s)<h3>(?:入力例|Sample Input)\s*\d+</h3>\s*<pre>(.*?)</pre>.*?<h3>(?:出力例|Sample Output)\s*\d+</h3>\s*<pre>(.*?)</pre>`
+	testcasesRegex     = `(?s)<h3>Sample Input\s*\d+</h3>\s*<pre>(.*?)</pre>.*?<h3>Sample Output\s*\d+</h3>\s*<pre>(.*?)</pre>`
 	cookieKey          = cookieContextKey{}
 	directoryKey       = directoryContextKey{}
 )

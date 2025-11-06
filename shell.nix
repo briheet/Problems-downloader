@@ -7,7 +7,11 @@ pkgs.mkShell {
     golangci-lint-langserver
     delve
 
-    gcc
+    gcc14
   ];
-  
+  shellHook = ''
+    export NIX_CC="${pkgs.gcc14.cc}"
+    export PATH="${pkgs.gcc14.cc}/bin:${pkgs.gcc14}/bin:$PATH"
+    unset DEVELOPER_DIR_FOR_TARGET
+  '';
 }

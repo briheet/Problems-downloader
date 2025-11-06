@@ -1,7 +1,0 @@
-[
-  {
-    "directory": "/Users/briheet/code/Problems-downloader/ABC430/A",
-    "command": "/nix/store/x0rg5sdxc63l5knb8pmyqnb75njbl533-gcc-14.3.0/bin/g++ -std=gnu++17 -O2 -Wall -Wextra -isystem /nix/store/x0rg5sdxc63l5knb8pmyqnb75njbl533-gcc-14.3.0/include/c++/14.3.0 -isystem /nix/store/x0rg5sdxc63l5knb8pmyqnb75njbl533-gcc-14.3.0/include/c++/14.3.0/arm64-apple-darwin -isystem /nix/store/x0rg5sdxc63l5knb8pmyqnb75njbl533-gcc-14.3.0/include/c++/14.3.0/backward -isystem /nix/store/x0rg5sdxc63l5knb8pmyqnb75njbl533-gcc-14.3.0/lib/gcc/arm64-apple-darwin/14.3.0/include -isystem /nix/store/x0rg5sdxc63l5knb8pmyqnb75njbl533-gcc-14.3.0/include -isystem /nix/store/x0rg5sdxc63l5knb8pmyqnb75njbl533-gcc-14.3.0/lib/gcc/arm64-apple-darwin/14.3.0/include-fixed -isystem /nix/store/ybygcq3s191f07bwgxbqpgqv0ak4h17k-apple-sdk-11.3/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include -isysroot /nix/store/ybygcq3s191f07bwgxbqpgqv0ak4h17k-apple-sdk-11.3/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -c main.cpp -o main.o",
-    "file": "main.cpp"
-  }
-]

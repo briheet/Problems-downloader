@@ -6,6 +6,8 @@ pkgs.mkShell {
     gopls
     golangci-lint-langserver
     delve
+
+    gcc
   ];
   
 }

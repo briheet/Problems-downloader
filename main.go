@@ -8,11 +8,15 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"time"
+
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 )
@@ -26,10 +30,13 @@ type Cookie struct {
 }
 
 type cookieContextKey struct{}
+type directoryContextKey struct{}
 
 var (
-	getProblemsPageURL string = "https://atcoder.jp/contests/abc"
-	cookieKey                 = cookieContextKey{}
+	getProblemsPageURL = "https://atcoder.jp/contests/abc"
+	testcasesRegex     = `(?s)<h3>(?:入力例|Sample Input)\s*\d+</h3>\s*<pre>(.*?)</pre>.*?<h3>(?:出力例|Sample Output)\s*\d+</h3>\s*<pre>(.*?)</pre>`
+	cookieKey          = cookieContextKey{}
+	directoryKey       = directoryContextKey{}
 )
 
 func main() {
@@ -183,7 +190,31 @@ func DownloadAndLoadProblems(ctx context.Context, contestNumber int, directoryPa
 		if err != nil {
 			return err
 		}
+	}
 
+	// Directories are created, now copy the main.cpp file and add testcases in the directory
+	// Download the html file of the contest page, parse the input and output and create new files
+	errChan := make(chan error, problemsNumber)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < problemsNumber; i++ {
+		alpha := string('A' + rune(i))
+
+		wg.Add(1)
+		go func(a string) {
+			downloadAndCreateTestcases(ctx, contestNumber, directoryPath, a, &wg, errChan)
+		}(alpha)
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	for err := range errChan {
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -193,7 +224,7 @@ func GetNumberOfProblems(ctx context.Context, contestNumber int) (int, error) {
 
 	currentContestPageURL := getProblemsPageURL + strconv.Itoa(contestNumber)
 
-	client := http.Client{}
+	client := http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, "GET", currentContestPageURL, nil)
 	if err != nil {
 		return 0, err
@@ -256,4 +287,113 @@ func GetNumberOfProblems(ctx context.Context, contestNumber int) (int, error) {
 	}
 
 	return len(uniqueTasks), nil
+}
+
+func downloadAndCreateTestcases(ctx context.Context, contestNumber int, directoryPath string, alpha string, wg *sync.WaitGroup, errChan chan<- error) {
+
+	defer wg.Done()
+
+	var client http.Client
+
+	// Build url.
+	reqUrl := fmt.Sprintf("%s%d/tasks/abc%d_%s",
+		getProblemsPageURL,
+		contestNumber,
+		contestNumber,
+		strings.ToLower(alpha),
+	)
+
+	fmt.Println(reqUrl)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", reqUrl, nil)
+	if err != nil {
+		errChan <- err
+		return
+	}
+
+	cookieVals, ok := ctx.Value(cookieKey).(Cookie)
+	if !ok {
+		errChan <- fmt.Errorf("unable to get cookie values: %s", reqUrl)
+		return
+	}
+
+	req.AddCookie(&http.Cookie{Name: "REVEL_SESSION", Value: cookieVals.RevelSession})
+	req.AddCookie(&http.Cookie{Name: "_ga", Value: cookieVals.Ga})
+	req.AddCookie(&http.Cookie{Name: "_ga_RC512FD18N", Value: cookieVals.Ga_})
+	req.AddCookie(&http.Cookie{Name: "timeDelta", Value: cookieVals.TimeDelta})
+	req.AddCookie(&http.Cookie{Name: "REVEL_FLASH", Value: cookieVals.RevelFlash})
+
+	resp, err := client.Do(req)
+	if err != nil {
+		errChan <- err
+		return
+	}
+
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			errChan <- err
+			return
+		}
+	}()
+
+	if resp.StatusCode != 200 {
+		errChan <- fmt.Errorf("the request resp has this status code: %v", resp.StatusCode)
+		return
+	}
+
+	htmlBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		errChan <- err
+		return
+	}
+
+	testcaseRe := regexp.MustCompile(testcasesRegex)
+	matches := testcaseRe.FindAllStringSubmatch(string(htmlBytes), -1)
+
+	directoryPath = filepath.Join(directoryPath, strings.ToUpper(alpha))
+
+	for idx, m := range matches {
+
+		inputFileName := filepath.Join(directoryPath, fmt.Sprintf("input%s.txt", strconv.Itoa(idx)))
+		outputFileName := filepath.Join(directoryPath, fmt.Sprintf("output%s.txt", strconv.Itoa(idx)))
+
+		inputFile, err := os.Create(inputFileName)
+		if err != nil {
+			errChan <- err
+			return
+		}
+
+		defer func() {
+			if err := inputFile.Close(); err != nil {
+				errChan <- err
+				return
+			}
+		}()
+
+		outputFile, err := os.Create(outputFileName)
+		if err != nil {
+			errChan <- err
+			return
+		}
+
+		defer func() {
+			if err := outputFile.Close(); err != nil {
+				errChan <- err
+				return
+			}
+		}()
+
+		_, err = inputFile.WriteString(m[1])
+		if err != nil {
+			errChan <- err
+			return
+		}
+
+		_, err = outputFile.WriteString(m[2])
+		if err != nil {
+			errChan <- err
+			return
+		}
+	}
+
 }

@@ -34,3 +34,19 @@ go build -ldflags "-s -w" -o ac main.go
 ```bash
 ./ac dw -c 430
 ```
+
+## Test runner (jj)
+
+Run sample tests for your solutions without leaving the contest folder.
+
+- `./ac jj` or `./ac jj .` scans the current directory; if no inputs are present it auto-runs all subdirectories that have them (e.g. ABC430/A, B, etc.).
+- Provide one or more dirs/paths to target specific problems: `./ac jj A`, `./ac jj A C`, or `./ac jj path/to/A`.
+- Each target dir looks for `main.cpp` (or any `*.cpp`), builds with `g++ -std=gnu++17 -O2`, then runs `input*.txt` vs matching `output*.txt` with a 5s per-test timeout.
+- Results show `[PASS]/[FAIL]` with compile/runtime/output mismatches surfaced while continuing across all dirs.
+
+Usage example (from contest dir):
+```bash
+./ac jj
+```
+
+![jj run example](assets/time.png)

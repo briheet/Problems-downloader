@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,15 +9,16 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"time"
-
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -36,6 +38,46 @@ var (
 	testcasesRegex     = `(?s)<h3>Sample Input\s*\d+</h3>\s*<pre>(.*?)</pre>.*?<h3>Sample Output\s*\d+</h3>\s*<pre>(.*?)</pre>`
 	cookieKey          = cookieContextKey{}
 )
+
+const defaultCPPTemplate = `#include <iostream>
+#include <iostream>
+#include <vector>
+#include <algorithm>
+#include <string>
+#include <queue>
+#include <stack>
+#include <set>
+#include <map>
+#include <unordered_map>
+#include <unordered_set>
+#include <cmath>
+#include <numeric>
+#include <tuple>
+#include <cassert>
+using namespace std;
+
+using P = pair<int,int>;
+using ll = long long;
+#define all(x) x.begin(), x.end()
+#define MOD 1000000007
+#define rep(i,n) for (int i = 0; i < (n); ++i)
+
+inline void test_case() {
+
+
+}
+
+signed main()
+{
+    ios::sync_with_stdio(0);
+    cin.tie(0);
+    int test_case_number = 1;
+    // cin >> test_case_number;
+    while (test_case_number--)
+        test_case();
+    return 0;
+}
+`
 
 func main() {
 
@@ -151,10 +193,49 @@ func downloadCmd(ctx context.Context) *cobra.Command {
 func runTestsCmd(ctx context.Context) *cobra.Command {
 
 	runTestsCmd := &cobra.Command{
-		Use:   "jj",
-		Short: "Run tests with help of this",
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			// Security check like dirs and whatever exists or not and so on
+		Use:   "jj [paths...]",
+		Short: "Run testcases for one or more problem directories",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Default to current directory when no path is provided
+			if len(args) == 0 {
+				args = []string{"."}
+			}
+
+			var targetDirs []string
+			seen := make(map[string]struct{})
+
+			for _, p := range args {
+				dirs, err := resolveTestTargets(p)
+				if err != nil {
+					return err
+				}
+
+				for _, d := range dirs {
+					if _, exists := seen[d]; exists {
+						continue
+					}
+					seen[d] = struct{}{}
+					targetDirs = append(targetDirs, d)
+				}
+			}
+
+			if len(targetDirs) == 0 {
+				return fmt.Errorf("no test directories found")
+			}
+
+			var errs []string
+
+			for _, dir := range targetDirs {
+				fmt.Printf("==> Running tests in %s\n", dir)
+				if err := runTestsInDir(ctx, dir); err != nil {
+					errs = append(errs, fmt.Sprintf("%s: %v", dir, err))
+				}
+			}
+
+			if len(errs) > 0 {
+				return fmt.Errorf(strings.Join(errs, "\n"))
+			}
+
 			return nil
 		},
 	}
@@ -203,7 +284,7 @@ func DownloadAndLoadProblems(ctx context.Context, contestNumber int, directoryPa
 		go func(a string) {
 			downloadAndCreateTestcases(ctx, contestNumber, directoryPath, a, &wg, errChan)
 		}(alpha)
-		time.Sleep(200 * time.Millisecond)
+		// time.Sleep(200 * time.Millisecond)
 	}
 
 	wg.Wait()
@@ -350,6 +431,11 @@ func downloadAndCreateTestcases(ctx context.Context, contestNumber int, director
 
 	directoryPath = filepath.Join(directoryPath, strings.ToUpper(alpha))
 
+	if err := ensureDefaultSource(directoryPath); err != nil {
+		errChan <- err
+		return
+	}
+
 	for idx, m := range matches {
 
 		inputFileName := filepath.Join(directoryPath, fmt.Sprintf("input%s.txt", strconv.Itoa(idx)))
@@ -394,4 +480,258 @@ func downloadAndCreateTestcases(ctx context.Context, contestNumber int, director
 		}
 	}
 
+}
+
+type testCase struct {
+	name       string
+	inputFile  string
+	outputFile string
+	input      []byte
+	expected   []byte
+}
+
+func runTestsInDir(ctx context.Context, dir string) error {
+	sourceFile, err := findSourceFile(dir)
+	if err != nil {
+		return err
+	}
+
+	testcases, err := collectTestcases(dir)
+	if err != nil {
+		return err
+	}
+
+	binPath, err := compileSource(ctx, dir, sourceFile)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = os.Remove(binPath)
+	}()
+
+	fmt.Printf("Using source: %s (%d testcases)\n", filepath.Base(sourceFile), len(testcases))
+
+	passed := 0
+	for idx, tc := range testcases {
+		label := tc.name
+		if label == "" {
+			label = strconv.Itoa(idx)
+		}
+
+		ok, testErr := runSingleTest(ctx, binPath, tc)
+		if ok {
+			fmt.Printf("  [PASS] %s\n", label)
+			passed++
+			continue
+		}
+
+		fmt.Printf("  [FAIL] %s: %v\n", label, testErr)
+	}
+
+	fmt.Printf("Result for %s: %d/%d passed\n", dir, passed, len(testcases))
+	if passed != len(testcases) {
+		return fmt.Errorf("some tests failed in %q", dir)
+	}
+
+	return nil
+}
+
+func resolveTestTargets(path string) ([]string, error) {
+	if path == "" {
+		path = "."
+	}
+
+	cleanPath := filepath.Clean(path)
+	info, err := os.Stat(cleanPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if !info.IsDir() {
+		return nil, fmt.Errorf("path %q is not a directory", cleanPath)
+	}
+
+	hasTests, err := directoryHasTests(cleanPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if hasTests {
+		return []string{cleanPath}, nil
+	}
+
+	entries, err := os.ReadDir(cleanPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var dirs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+
+		subDir := filepath.Join(cleanPath, e.Name())
+		ok, err := directoryHasTests(subDir)
+		if err != nil {
+			return nil, err
+		}
+
+		if ok {
+			dirs = append(dirs, subDir)
+		}
+	}
+
+	if len(dirs) == 0 {
+		return nil, fmt.Errorf("no testcases found under %q", cleanPath)
+	}
+
+	sort.Strings(dirs)
+	return dirs, nil
+}
+
+func directoryHasTests(dir string) (bool, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, "input*.txt"))
+	if err != nil {
+		return false, err
+	}
+
+	return len(matches) > 0, nil
+}
+
+func collectTestcases(dir string) ([]testCase, error) {
+	inputFiles, err := filepath.Glob(filepath.Join(dir, "input*.txt"))
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Strings(inputFiles)
+
+	if len(inputFiles) == 0 {
+		return nil, fmt.Errorf("no input files found in %q", dir)
+	}
+
+	var testcases []testCase
+
+	for _, inputPath := range inputFiles {
+		base := filepath.Base(inputPath)
+		suffix := strings.TrimPrefix(strings.TrimSuffix(base, ".txt"), "input")
+		outputPath := filepath.Join(dir, fmt.Sprintf("output%s.txt", suffix))
+
+		outputBytes, err := os.ReadFile(outputPath)
+		if err != nil {
+			return nil, fmt.Errorf("expected output file %q: %w", outputPath, err)
+		}
+
+		inputBytes, err := os.ReadFile(inputPath)
+		if err != nil {
+			return nil, err
+		}
+
+		testcases = append(testcases, testCase{
+			name:       suffix,
+			inputFile:  inputPath,
+			outputFile: outputPath,
+			input:      inputBytes,
+			expected:   outputBytes,
+		})
+	}
+
+	return testcases, nil
+}
+
+func findSourceFile(dir string) (string, error) {
+	path := filepath.Join(dir, "main.cpp")
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("expected main.cpp in %q: %w", dir, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("expected main.cpp in %q but found a directory", dir)
+	}
+	return path, nil
+}
+
+func ensureDefaultSource(dir string) error {
+	target := filepath.Join(dir, "main.cpp")
+	_, err := os.Stat(target)
+	if err == nil {
+		return nil
+	}
+
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	if err := os.WriteFile(target, []byte(defaultCPPTemplate), 0644); err != nil {
+		return fmt.Errorf("unable to create default main.cpp in %q: %w", dir, err)
+	}
+
+	return nil
+}
+
+func compileSource(ctx context.Context, workDir string, source string) (string, error) {
+	tmpFile, err := os.CreateTemp("", "ac-bin-*")
+	if err != nil {
+		return "", err
+	}
+	binPath := tmpFile.Name()
+
+	if err := tmpFile.Close(); err != nil {
+		return "", err
+	}
+
+	sourceArg := source
+	if workDir != "" {
+		if absWork, err := filepath.Abs(workDir); err == nil {
+			if absSrc, err := filepath.Abs(source); err == nil {
+				if rel, err := filepath.Rel(absWork, absSrc); err == nil {
+					sourceArg = rel
+				}
+			}
+		}
+	}
+
+	cmd := exec.CommandContext(ctx, "g++", "-std=gnu++17", "-O2", "-pipe", "-o", binPath, sourceArg)
+	cmd.Dir = workDir
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("failed to compile %s: %v\n%s", source, err, string(out))
+	}
+
+	return binPath, nil
+}
+
+func runSingleTest(ctx context.Context, binary string, tc testCase) (bool, error) {
+	runCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, binary)
+	cmd.Stdin = bytes.NewReader(tc.input)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			return false, fmt.Errorf("timeout after 5s")
+		}
+
+		trimmedErr := strings.TrimSpace(stderr.String())
+		if trimmedErr == "" {
+			trimmedErr = err.Error()
+		}
+		return false, fmt.Errorf("program error: %s", trimmedErr)
+	}
+
+	expected := bytes.TrimRight(tc.expected, "\r\n")
+	actual := bytes.TrimRight(stdout.Bytes(), "\r\n")
+
+	if !bytes.Equal(expected, actual) {
+		return false, fmt.Errorf("mismatch\nexpected:\n%s\nactual:\n%s", string(expected), string(actual))
+	}
+
+	return true, nil
 }

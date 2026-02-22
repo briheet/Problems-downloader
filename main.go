@@ -751,12 +751,20 @@ func runSingleTest(ctx context.Context, binary string, tc testCase) (bool, error
 		return false, fmt.Errorf("program error: %s", trimmedErr)
 	}
 
-	expected := bytes.TrimRight(tc.expected, "\r\n")
-	actual := bytes.TrimRight(stdout.Bytes(), "\r\n")
+	expected := normalizeOutput(tc.expected)
+	actual := normalizeOutput(stdout.Bytes())
 
 	if !bytes.Equal(expected, actual) {
 		return false, fmt.Errorf("mismatch\nexpected:\n%s\nactual:\n%s", string(expected), string(actual))
 	}
 
 	return true, nil
+}
+
+func normalizeOutput(b []byte) []byte {
+	lines := bytes.Split(b, []byte("\n"))
+	for i, line := range lines {
+		lines[i] = bytes.TrimRight(line, " \t\r")
+	}
+	return bytes.TrimRight(bytes.Join(lines, []byte("\n")), "\n")
 }

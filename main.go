@@ -39,6 +39,31 @@ var (
 	cookieKey          = cookieContextKey{}
 )
 
+func getCookieFilePath() (string, error) {
+	// Check environment variable first
+	if envPath := os.Getenv("AC_COOKIE_PATH"); envPath != "" {
+		if _, err := os.Stat(envPath); err == nil {
+			return envPath, nil
+		}
+		return "", fmt.Errorf("AC_COOKIE_PATH set to %q but file not found", envPath)
+	}
+
+	// Check XDG config directory (~/.config/ac/cookie.json)
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		configPath := filepath.Join(homeDir, ".config", "ac", "cookie.json")
+		if _, err := os.Stat(configPath); err == nil {
+			return configPath, nil
+		}
+	}
+
+	// Fall back to current directory
+	if _, err := os.Stat("cookie.json"); err == nil {
+		return "cookie.json", nil
+	}
+
+	return "", fmt.Errorf("cookie.json not found. Place it in ~/.config/ac/cookie.json or set AC_COOKIE_PATH")
+}
+
 const defaultCPPTemplate = `#include <iostream>
 #include <iostream>
 #include <vector>
@@ -115,12 +140,13 @@ func downloadCmd(ctx context.Context) *cobra.Command {
 				fmt.Println("Hi from darwin side")
 			}
 
-			// Open file, get cookies
-			fileName := "cookie.json"
-			flags := os.O_RDONLY
-			perm := os.FileMode(0400) // Read only permission
+			// Find and open cookie file
+			cookiePath, err := getCookieFilePath()
+			if err != nil {
+				return err
+			}
 
-			file, err := os.OpenFile(fileName, flags, perm)
+			file, err := os.OpenFile(cookiePath, os.O_RDONLY, 0400)
 			if err != nil {
 				return err
 			}
@@ -254,7 +280,6 @@ func DownloadAndLoadProblems(ctx context.Context, contestNumber int, directoryPa
 	// Now we will have to make that many directories, starting from A and so on. Lets take this directory as a flag
 	// Loop over the problems and create directoriess.
 	// First build the main directory i.e. the contest number
-
 	directoryPath = filepath.Join(directoryPath, fmt.Sprintf("ABC%d", contestNumber))
 	err = os.MkdirAll(directoryPath, 0755)
 	if err != nil {
@@ -284,7 +309,7 @@ func DownloadAndLoadProblems(ctx context.Context, contestNumber int, directoryPa
 		go func(a string) {
 			downloadAndCreateTestcases(ctx, contestNumber, directoryPath, a, &wg, errChan)
 		}(alpha)
-		// time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	wg.Wait()
